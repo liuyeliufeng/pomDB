@@ -1,5 +1,15 @@
 <?php
 
+/**
+ * @brief
+ * PomDB is a light/high-security/powerful/gentle ORM arch for PHPer.
+ * It only support mysql for now.
+ * In future more kinds of database engine will also be supported.
+ *
+ * @author xiashanshan
+ * Class PomDB
+ */
+
 class PomDB {
 
     // mysql
@@ -135,6 +145,8 @@ class PomDB {
                     $filed = $matches[1];
                     $operator = $matches[2];
                 }
+                // prevent sql injection
+                $value = $this->mysql->real_escape_string($value);
 
                 switch($type){
                     case 'NULL':
@@ -201,12 +213,15 @@ class PomDB {
         if (!is_array($fields) || empty($fields)) {
             return $fieldsClause;
         }
-        foreach ($fields as $field) {
-            if (!strpos($field, '(')) {
-                $arrFields[] = $field;
-            } else {
-                preg_match('/^(\S+)\((\S+)\)$/', $field, $matches);
-                $arrFields[] = $matches[1]. ' as '. $matches[2];
+        foreach ($fields as $field => $alias) {
+//            if (!strpos($field, '(')) {
+//                $arrFields[] = $field;
+//            } else {
+//                preg_match('/^(\S+)\((\S+)\)$/', $field, $matches);
+//                $arrFields[] = $matches[1]. ' as '. $matches[2];
+//            }
+            if (isset($alias)) {
+                $arrFields[] = $field. ' as '. $alias;
             }
         }
         return implode(',', $arrFields);
@@ -255,7 +270,11 @@ class PomDB {
         return $joinsClause;
     }
 
-
+    /**
+     * mysql exec sql
+     * @param $sql
+     * @return bool|mysqli_result
+     */
     public function query($sql) {
         if (!$this->is_connected) {
             print_r('connect to server fail');
@@ -270,6 +289,7 @@ class PomDB {
 
 
     /**
+     * interface: select fields from table
      * @param $table
      * @param null $fields
      * @param null $joins
@@ -294,18 +314,90 @@ class PomDB {
         return $this->query($strSql);
     }
 
-    public function insert($table, $data) {
+    /**
+     * interface: insert into table data
+     * @param $table
+     * @param $fields
+     * @param $data
+     * @return bool|mysqli_result
+     */
+    public function insert($table, $fields, $data) {
+        if (!is_array($fields) || !is_array($data)) {
+            return false;
+        }
+        $strField = implode(',', $fields);
 
+        $arrData = array();
+        // if data is multi-dimension array
+        if (count($data) == count($data, 1)) {
+            $strValue = implode(',', $data);
+            $arrData[] = "($strValue)";
+        } else {
+            foreach($data as $key => $value) {
+                $strValue = implode(',', $value);
+                $arrData[] = "($strValue)";
+            }
+        }
+        $strData = implode(',', $arrData);
+        $strSql = "insert into $table($strField) values $strData";
+        return $this->query($strSql);
     }
 
+    /**
+     * interface: update table
+     * @param $table
+     * @param $fields
+     * @param $conditions
+     * @return bool|mysqli_result
+     */
     public function update($table, $fields, $conditions) {
-
+        if (!is_array($fields)) {
+            return false;
+        }
+        $arrField = array();
+        foreach($fields as $field => $value) {
+            $type = gettype($value);
+            $strField = '';
+            switch($type) {
+                case 'NULL':
+                    $strField = "$field=null";
+                    break;
+                case 'string':
+                    $strField = "$field='$value'";
+                    break;
+                default:
+                    $strField = "$field=$value";
+                    break;
+            }
+            $arrField[] = $strField;
+        }
+        $fieldClaus = implode(',', $arrField);
+        $conditionClause = $this->_conditionClause($conditions);
+        $strSql = "update $table set $fieldClaus $conditionClause";
+        return $this->query($strSql);
     }
 
-    public function delete($table, $conditions) {
-
+    /**
+     * interface: delete columns from table
+     * @param $table
+     * @param null $conditions
+     * @return bool|mysqli_result
+     */
+    public function delete($table, $conditions = null) {
+        $conditionClause = '';
+        if (is_array($conditions)) {
+            $conditionClause = $this->_conditionClause($conditions);
+        }
+        $strSql = "delete from $table ";
+        if (!empty($conditionClause)) {
+            $strSql .= $conditionClause;
+        }
+        return $this->query($strSql);
     }
 
+    /**
+     * close the connection to mysql
+     */
     public function close() {
         if (!$this->is_connected) {
             return ;
