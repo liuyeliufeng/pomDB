@@ -9,6 +9,8 @@
  * @author xiashanshan
  * Class PomDB
  */
+define('SUCCESS', '0');
+define('QUERY_ERROR', '1');
 
 class PomDB {
 
@@ -32,6 +34,8 @@ class PomDB {
     private $charset;
     // mysql options
     private $options;
+    // last execute sql
+    private $lastSql;
 
 
     public function __construct($database, $options = null)
@@ -63,6 +67,9 @@ class PomDB {
     }
 
     private function _setOptions() {
+        if (empty($this->options)) {
+            return false;
+        }
         foreach($this->options as $name => $value) {
             $this->mysql->options($name, $value);
         }
@@ -73,9 +80,23 @@ class PomDB {
         $this->close();
     }
 
+    /**
+     * implode array into sql string
+     * @param $columns
+     * @return string
+     */
     private function _arrayQuote($columns) {
+        if (!is_array($columns)) {
+            return false;
+        }
+
         foreach($columns as $column) {
-            $arrColumn = is_int($column) ? $column : "'$column'";
+            if (is_array($column) || empty($column)) {
+                continue;
+            } else if(is_string($column)) {
+                $column = $this->mysql->real_escape_string($column);
+            }
+            $arrColumn[] = is_string($column) ? "'$column'" : $column;
         }
         return implode(',', $arrColumn);
     }
@@ -89,7 +110,6 @@ class PomDB {
     private function _conditionClause($conditions) {
 
         $conditionClause = '';
-
         if (!is_array($conditions) || empty($conditions)) {
             return $conditionClause;
         }
@@ -97,12 +117,14 @@ class PomDB {
             $conditionClause .= ' where '. $this->_dataClause($conditions['where']);
         }
         if (isset($conditions['order'])) {
-            $conditionClause .= ' order by '. is_array($conditions['order']) ?
+            $tempClause = is_array($conditions['order']) ?
                 implode(',', $conditions['order']) : $conditions['order'];
+            $conditionClause .= ' order by '. $tempClause;
         }
         if (isset($conditions['limit'])) {
-            $conditionClause .= ' limit '. is_array($conditions['limit']) ?
+            $tempClause = is_array($conditions['limit']) ?
                 implode(',', $conditions['limit']) : '0,'. $conditions['limit'];
+            $conditionClause .= ' limit '. $tempClause;
         }
         if (isset($conditions['group'])) {
             $conditionClause .= ' group by '. $conditions['group'];
@@ -145,8 +167,6 @@ class PomDB {
                     $filed = $matches[1];
                     $operator = $matches[2];
                 }
-                // prevent sql injection
-                $value = $this->mysql->real_escape_string($value);
 
                 switch($type){
                     case 'NULL':
@@ -161,12 +181,15 @@ class PomDB {
                     case 'double':
                         if (!isset($operator)) {
                             $wheres[] = "$filed = $value";
-                        } else {
+                        } else if ($operator == '!') {
+                            $wheres[] = "$filed != $value";
+                        }else {
                             $wheres[] = "$filed $operator $value";
                         }
                         break;
 
                     case 'string':
+                        $value = $this->mysql->real_escape_string($value);
                         if (!isset($operator)) {
                             $wheres[] = "$filed = '$value'";
                         } else if ($operator == '!') {
@@ -208,22 +231,19 @@ class PomDB {
     private function _fieldsClause($fields) {
 
         $fieldsClause = '*';
-        $arrFields = array();
-
         if (!is_array($fields) || empty($fields)) {
             return $fieldsClause;
         }
-        foreach ($fields as $field => $alias) {
-//            if (!strpos($field, '(')) {
-//                $arrFields[] = $field;
-//            } else {
-//                preg_match('/^(\S+)\((\S+)\)$/', $field, $matches);
-//                $arrFields[] = $matches[1]. ' as '. $matches[2];
-//            }
-            if (isset($alias)) {
+        $arrFields = array();
+        // if the fields is assoc array
+        if (count(array_filter(array_keys($fields, 'is_string'))) > 0) {
+            foreach ($fields as $field => $alias) {
                 $arrFields[] = $field. ' as '. $alias;
             }
+        } else {
+            $arrFields = $fields;
         }
+
         return implode(',', $arrFields);
     }
 
@@ -241,6 +261,9 @@ class PomDB {
             return $joinsClause;
         }
         foreach ($joins as $key => $value) {
+
+            $tableAlias = '';
+
             if (!strpos($key, '(')) {
 
                 preg_match('/^(\S+)\|(\S+)$/', $key, $matches);
@@ -280,11 +303,24 @@ class PomDB {
             print_r('connect to server fail');
             return false;
         }
+        $this->lastSql = $sql;
         $ret = $this->mysql->query($sql);
-        if ($ret !== false) {
-            return $ret;
+        $arrRet = array();
+        if (is_bool($ret) || $ret == null) {
+            if ($ret == true) {
+                return $this->mysql->affected_rows;
+            } else {
+                print_r($this->mysql->error);
+                return false;
+            }
+        } else {
+            while($row = $ret->fetch_assoc())
+            {
+                $arrRet[] = $row;
+            }
+            $ret->free();
         }
-        return true;
+        return $arrRet;
     }
 
 
@@ -306,9 +342,8 @@ class PomDB {
             preg_match('/^(\S+)\((\S+)\)$/', $table, $matches);
             $tableName = $matches[1];
             $tableAlias = $matches[2];
+            $table = "$tableName $tableAlias";
         }
-
-        $table = "$tableName $tableAlias";
 
         $strSql = "select $fieldClause from $table $joinClause $conditionClause";
         return $this->query($strSql);
@@ -330,11 +365,11 @@ class PomDB {
         $arrData = array();
         // if data is multi-dimension array
         if (count($data) == count($data, 1)) {
-            $strValue = implode(',', $data);
+            $strValue = $this->_arrayQuote($data);
             $arrData[] = "($strValue)";
         } else {
             foreach($data as $key => $value) {
-                $strValue = implode(',', $value);
+                $strValue = $this->_arrayQuote($value);
                 $arrData[] = "($strValue)";
             }
         }
@@ -363,6 +398,7 @@ class PomDB {
                     $strField = "$field=null";
                     break;
                 case 'string':
+                    $value = $this->mysql->real_escape_string($value);
                     $strField = "$field='$value'";
                     break;
                 default:
@@ -396,6 +432,12 @@ class PomDB {
     }
 
     /**
+     * @return mixed
+     */
+    public function getLastSql() {
+        return $this->lastSql;
+    }
+    /**
      * close the connection to mysql
      */
     public function close() {
@@ -404,5 +446,34 @@ class PomDB {
         }
         $this->is_connected = false;
         $this->mysql->close();
+    }
+
+
+    /**
+     * begin_transaction
+     */
+    public function beginTransaction() {
+        if (!$this->is_connected) {
+            return ;
+        }
+        $this->mysql->begin_transaction();
+    }
+    /**
+     * commit transaction
+     */
+    public function commit() {
+        if (!$this->is_connected) {
+            return ;
+        }
+        $this->mysql->commit();
+    }
+    /**
+     * transaction rollback
+     */
+    public function rollback() {
+        if (!$this->is_connected) {
+            return ;
+        }
+        $this->mysql->rollback();
     }
 }
