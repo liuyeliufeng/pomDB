@@ -1,6 +1,6 @@
 # pomDB
 
-PomDB is a ORM arch for PHP. For now, it only support *MySQL* database.
+PomDB is a very lightweight ORM arch for PHP. while it only support *MySQL* database for now, but in future it can be compatibly support kinds of SQL databases .
 
 ## Why choose PomDB?
 
